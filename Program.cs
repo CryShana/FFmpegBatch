@@ -18,6 +18,31 @@ if (args.Length <= 1)
     return;
 }
 
+// CURRENT PROCESS (tracked for cancellation)
+Process? _process = null;
+bool _cancelled = false;
+CancelKeyPress += (_, b) =>
+{
+    _cancelled = true;
+    b.Cancel = true;
+
+    // kill any running FFmpeg process
+    try
+    {
+        if (_process != null)
+        {
+            try
+            {
+                _process.Kill();
+                _process.Dispose();
+                _process = null;
+            }
+            catch { }
+        }
+    }
+    catch { }
+};
+
 try
 {
     // PROCESS ARGUMENTS
@@ -35,7 +60,7 @@ try
     "  - Move directory: " + (string.IsNullOrEmpty(move_dir) ? "None".Colorize(StringColors.Red) : move_dir.Colorize(StringColors.Cyan)) + "\n" +
     "  - Output extension: " + (string.IsNullOrEmpty(ext) ? "None".Colorize(StringColors.Red) : ext.Colorize(StringColors.Cyan)) + "\n" +
     "  - FFmpeg parameters: " + "-i [input] ".Colorize(StringColors.Gray) + ffparams.Colorize(StringColors.Cyan) + $" -y [output]{ext}".Colorize(StringColors.Gray));
-    
+
     Write("\nProceed? (y/n): ");
     var choice = ReadLine()?.ToLower() ?? "n";
     if (choice != "y")
@@ -48,6 +73,9 @@ try
     WriteLine("\nProcessing files:");
     foreach (var f in input_files)
     {
+        if (_cancelled)
+            break;
+
         WriteLine();
 
         var dir = Path.GetDirectoryName(f) ?? "";
@@ -71,7 +99,7 @@ try
         var ts_modified = File.GetLastWriteTime(f);
         var ts_accessed = File.GetLastAccessTime(f);
 
-        using var process = new Process
+        _process = new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -84,29 +112,31 @@ try
             }
         };
 
-        if (!process.Start())
+        if (!_process.Start())
         {
+            _process.Dispose();
+            _process = null;
             throw new Exception("Failed to start FFmpeg, make sure it is installed and accessible from current location (add to PATH if necessary)");
         }
 
         var log = "";
-        process.ErrorDataReceived += (_, b) =>
+        _process.ErrorDataReceived += (_, b) =>
         {
-            if (b.Data == null) 
+            if (b.Data == null)
                 return;
 
             log += "\n" + b.Data;
-        };  
-        process.BeginErrorReadLine();
+        };
+        _process.BeginErrorReadLine();
 
         var sw = Stopwatch.StartNew();
 
         Write(StatusUpdate(f, output, "PROCESSING ".Colorize(StringColors.Yellow)));
-        process.WaitForExit();
+        _process.WaitForExit();
 
         sw.Stop();
 
-        if (process.ExitCode != 0)
+        if (_process == null || _process.ExitCode != 0)
         {
             try
             {
@@ -117,9 +147,12 @@ try
 
             Write(StatusUpdate(f, output, "ERROR       ".Colorize(StringColors.Red)));
 
-            // make every line of log padded with spaces
-            log = log.Replace("\n", "\n    ");
-            WriteLine(log.Colorize(StringColors.GetForegroundColor(245, 124, 66)));
+            if (_process != null)
+            {
+                // make every line of log padded with spaces
+                log = log.Replace("\n", "\n    ");
+                WriteLine(log.Colorize(StringColors.GetForegroundColor(245, 124, 66)));
+            }
         }
         else
         {
@@ -151,12 +184,29 @@ try
             var time = seconds < 60 ? $"{seconds:0.0}s" : $"{seconds / 60:0.0}m";
             Write(StatusUpdate(f, output, $"OK [{time}]       ".Colorize(StringColors.Green)));
         }
+
+        if (_process != null)
+            _process.Dispose();
+
+        _process = null;
     }
 
-    WriteLine("\nAll files processed.");
+    if (!_cancelled)
+        WriteLine("\nAll files processed.");
 }
 catch (Exception ex)
 {
+    if (_process != null)
+    {
+        try
+        {
+            _process.Kill();
+            _process.Dispose();
+            _process = null;
+        }
+        catch { }
+    }
+
     WriteLine($"\nError: {ex.Message}".Colorize(StringColors.Red) + "\n");
 }
 

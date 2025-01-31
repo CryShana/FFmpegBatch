@@ -7,6 +7,12 @@
     <Nullable>enable</Nullable>
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <Version>1.0.0</Version>
+    <Authors>CryShana</Authors>
+    <Company>CryShana</Company>
+    <Copyright>CryShana</Copyright>
+    <Description>CLI tool for batching FFmpeg commands</Description>
   </PropertyGroup>
+
 
 </Project>
