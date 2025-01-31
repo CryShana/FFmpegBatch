@@ -23,9 +23,9 @@ I don't want to write a script every time, and I want a nice overview of all fil
 ### Examples
 - `ffmpegBatch.exe -ext mp3 .`
     - converts all files in current directory to MP3 files
-- `ffmpegBatch.exe -tscopy -rgx ".*?\.wav" -ext opus . "-b:a 128k"`
+- `ffmpegBatch.exe -tscopy -rgx ".*?\.wav" -ext opus . -b:a 128k`
     - converts all WAV files in current directory to OPUS files with 128kbps audio bitrate
-- `ffmpegBatch.exe -move "C://original" -ext webm "C://videos" "-c:v libsvtav1 -crf 40 -vf scale=-1:1080"`
+- `ffmpegBatch.exe -move "C://original" -ext webm "C://videos" -c:v libsvtav1 -crf 40 -vf scale=-1:1080`
     - converts all files in `C://videos` directory to WEBM files with AV1 codec and 1080p resolution, and moves original files to `C://original` directory
 
 ## Publish
