@@ -189,6 +189,7 @@ try
         {
             try
             {
+                await Task.Delay(100);
                 if (File.Exists(output))
                     File.Delete(output);
             }
@@ -235,20 +236,33 @@ try
 
             if (!string.IsNullOrEmpty(move_dir) && Directory.Exists(move_dir))
             {
+                // Get relative path from input root
+                var relativePath = Path.GetRelativePath(input_root, f);
+                var move_file = Path.Combine(move_dir, relativePath);
+
+                // Create directory structure if it doesn't exist
+                var move_file_dir = Path.GetDirectoryName(move_file);
+                if (!string.IsNullOrEmpty(move_file_dir) && !Directory.Exists(move_file_dir))
+                    Directory.CreateDirectory(move_file_dir);
+
                 try
                 {
-                    // Get relative path from input root
-                    var relativePath = Path.GetRelativePath(input_root, f);
-                    var move_file = Path.Combine(move_dir, relativePath);
-
-                    // Create directory structure if it doesn't exist
-                    var move_file_dir = Path.GetDirectoryName(move_file);
-                    if (!string.IsNullOrEmpty(move_file_dir) && !Directory.Exists(move_file_dir))
-                        Directory.CreateDirectory(move_file_dir);
-
+                    await Task.Delay(100);
                     File.Move(f, move_file, true);
                 }
-                catch { }
+                catch
+                {
+                    // try again a bit later
+                    await Task.Delay(250);
+                    try
+                    {
+                        File.Move(f, move_file, true);
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteLine(("Failed to move original: " + ex.Message).Colorize(StringColors.Red));
+                    }
+                }      
             }
 
             var seconds = sw.Elapsed.TotalSeconds;
