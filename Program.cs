@@ -23,7 +23,7 @@ if (args.Length <= 1)
 // CURRENT PROCESS (tracked for cancellation)
 Process? _process = null;
 bool _cancelled = false;
-Console.CancelKeyPress += (_, b) => // Fixed: Added Console. prefix
+CancelKeyPress += (_, b) =>
 {
     _cancelled = true;
     b.Cancel = true;
@@ -74,10 +74,6 @@ try
             return;
         }
     }
-    else
-    {
-        WriteLine("Proceeding automatically");
-    }
 
     // PROCESS FILES
     WriteLine("\nProcessing files:");
@@ -88,14 +84,19 @@ try
 
         WriteLine();
 
+        var duration_sec = -1.0;
+        var time_sec = -1.0;
+        var progress = 0.0;
+
         var dir = Path.GetDirectoryName(f) ?? "";
         var name = Path.GetFileNameWithoutExtension(f);
         var output = Path.Combine(dir, name + ext);
         var counter = 1;
+
         while (File.Exists(output))
             output = Path.Combine(dir, name + $"_{counter++}" + ext);
 
-        var cmd = $"-hide_banner -i \"{f}\" {ffparams} -y \"{output}\"";
+        var cmd = $"-hide_banner -progress pipe:2 -i \"{f}\" {ffparams} -y \"{output}\"";
 
         Write(StatusUpdate(f, output, "STARTING    ".Colorize(StringColors.Gray)));
 
@@ -135,14 +136,52 @@ try
             if (b.Data == null)
                 return;
 
+            //WriteLine(b.Data.Colorize(StringColors.Green));
+            if (duration_sec < 0)
+            {
+                var duration_match = Tool.DurationStartRegex().Match(b.Data);
+                if (duration_match.Success)
+                {
+                    var h = double.Parse(duration_match.Groups["hour"].Value);
+                    var m = double.Parse(duration_match.Groups["min"].Value);
+                    var s = double.Parse(duration_match.Groups["sec"].Value);
+                    duration_sec = s + (m * 60) + (h * 60 * 60);
+                }
+
+            }
+
+            var time_match = Tool.TimeRegex().Match(b.Data);
+            if (time_match.Success)
+            {
+                var h = double.Parse(time_match.Groups["hour"].Value);
+                var m = double.Parse(time_match.Groups["min"].Value);
+                var s = double.Parse(time_match.Groups["sec"].Value);
+                time_sec = s + (m * 60) + (h * 60 * 60);
+            }
+
+            if (duration_sec > 0 && time_sec > 0)
+            {
+                progress = (time_sec / duration_sec) * 100.0;
+            }
+
             log += "\n" + b.Data;
         };
         _process.BeginErrorReadLine();
 
         var sw = Stopwatch.StartNew();
 
-        Write(StatusUpdate(f, output, "PROCESSING ".Colorize(StringColors.Yellow)));
-        _process.WaitForExit();
+        while (_process != null && !_process.HasExited && !_cancelled)
+        {
+            await Task.Delay(100);
+            if (progress > 0)
+            {
+                Write(StatusUpdate(f, output, $"WORKING [{progress:0.0}%] ".Colorize(StringColors.Yellow)));
+            }
+            else
+            {
+                Write(StatusUpdate(f, output, "WORKING           ".Colorize(StringColors.Yellow)));
+            }
+        }
 
         sw.Stop();
 
@@ -153,9 +192,23 @@ try
                 if (File.Exists(output))
                     File.Delete(output);
             }
-            catch { }
+            catch
+            {
+                // try again with a delay, file was probably still used
+                await Task.Delay(250);
 
-            Write(StatusUpdate(f, output, "ERROR       ".Colorize(StringColors.Red)));
+                try
+                {
+                    if (File.Exists(output))
+                        File.Delete(output);
+                }
+                catch (Exception ex)
+                {
+                    WriteLine(("Failed to delete output file: " + ex.Message).Colorize(StringColors.Red));
+                }
+            }
+
+            Write(StatusUpdate(f, output, "ERROR             ".Colorize(StringColors.Red)));
 
             if (_process != null)
             {
@@ -187,12 +240,12 @@ try
                     // Get relative path from input root
                     var relativePath = Path.GetRelativePath(input_root, f);
                     var move_file = Path.Combine(move_dir, relativePath);
-                    
+
                     // Create directory structure if it doesn't exist
                     var move_file_dir = Path.GetDirectoryName(move_file);
                     if (!string.IsNullOrEmpty(move_file_dir) && !Directory.Exists(move_file_dir))
                         Directory.CreateDirectory(move_file_dir);
-                    
+
                     File.Move(f, move_file, true);
                 }
                 catch { }
@@ -200,7 +253,7 @@ try
 
             var seconds = sw.Elapsed.TotalSeconds;
             var time = seconds < 60 ? $"{seconds:0.0}s" : $"{seconds / 60:0.0}m";
-            Write(StatusUpdate(f, output, $"OK [{time}]       ".Colorize(StringColors.Green)));
+            Write(StatusUpdate(f, output, $"OK [{time}]         ".Colorize(StringColors.Green)));
         }
 
         if (_process != null)
@@ -225,8 +278,9 @@ catch (Exception ex)
         catch { }
     }
 
-    WriteLine($"\nError: {ex.Message}".Colorize(StringColors.Red) + "\n");
+    WriteLine($"\nError: {ex.Message}".Colorize(StringColors.Red) + "\n" + ex.StackTrace);
 }
+
 
 string StatusUpdate(string input, string output, string status)
 {
@@ -320,7 +374,7 @@ string CleanFFmpegParams(string ffparams)
     // COLLECT INPUT FILES
     List<string> input_files = new();
     string input_root = "";
-    
+
     if (File.Exists(input))
     {
         input_files.Add(input);
@@ -336,7 +390,7 @@ string CleanFFmpegParams(string ffparams)
     }
     else
     {
-        throw new ArgumentException("Input file or directory does not exist");
+        throw new ArgumentException("Input file or directory does not exist: '" + input + "'");
     }
 
     if (input_files.Count == 0)
@@ -345,4 +399,14 @@ string CleanFFmpegParams(string ffparams)
     }
 
     return (input_files, input_root);
+}
+
+
+public static partial class Tool
+{
+    [GeneratedRegex(@"out_time=(?<hour>\d+):(?<min>\d+):(?<sec>\d+\.?\d*)")]
+    public static partial Regex TimeRegex();
+
+    [GeneratedRegex(@"Duration: (?<hour>\d+):(?<min>\d+):(?<sec>\d+\.?\d*)")]
+    public static partial Regex DurationStartRegex();
 }
