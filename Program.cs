@@ -4,15 +4,17 @@ using System.Text.RegularExpressions;
 
 if (args.Length <= 1)
 {
-    WriteLine("Usage: " + "[-tscopy] [-move <directory>] [-rgx <pattern>] [-ext <output_extension>] ".Colorize(StringColors.Gray) + "<input_directory|input_file>".Colorize(StringColors.Cyan) + " <ffmpeg_params>");
+    WriteLine("Usage: " + "[-tscopy] [-move <directory>] [-rgx <pattern>] [-ext <output_extension>] [-r] [-y] ".Colorize(StringColors.Gray) + "<input_directory|input_file>".Colorize(StringColors.Cyan) + " <ffmpeg_params>");
     WriteLine();
     WriteLine("""
     Parameters:
     -tscopy: Copy timestamps from input to output file
-    -move: Move original input files to specified directory after processing
+    -move: Move original input files to specified directory after processing (preserves folder structure)
     -rgx <pattern>: Regular expression pattern to filter input files
     -ext <extension>: File extension for output filename (if not provided, no extension is added)
-    input_directory: If directory provided, all files in the directory are processed (not considering subdirectories)
+    -r: If provided, will recursively process subdirectories within input directory
+    -y: If provided, will skip user confirmation and start work immediately
+    input_directory: If directory provided, all files in the directory are processed
     ffmpeg_params: FFmpeg parameters passed to the process (input and output are skipped)
     """.Colorize(StringColors.Gray));
     return;
@@ -21,7 +23,7 @@ if (args.Length <= 1)
 // CURRENT PROCESS (tracked for cancellation)
 Process? _process = null;
 bool _cancelled = false;
-CancelKeyPress += (_, b) =>
+Console.CancelKeyPress += (_, b) => // Fixed: Added Console. prefix
 {
     _cancelled = true;
     b.Cancel = true;
@@ -46,7 +48,7 @@ CancelKeyPress += (_, b) =>
 try
 {
     // PROCESS ARGUMENTS
-    var input_files = ProcessArguments(out bool tscopy, out string ext, out string move_dir, out string ffparams);
+    var (input_files, input_root) = ProcessArguments(out bool tscopy, out string ext, out string move_dir, out string ffparams, out bool y, out bool recursive);
 
     ffparams = CleanFFmpegParams(ffparams);
 
@@ -59,14 +61,22 @@ try
     "  - Copy timestamps: " + (tscopy ? "Yes".Colorize(StringColors.Green) : "No".Colorize(StringColors.Red)) + "\n" +
     "  - Move directory: " + (string.IsNullOrEmpty(move_dir) ? "None".Colorize(StringColors.Red) : move_dir.Colorize(StringColors.Cyan)) + "\n" +
     "  - Output extension: " + (string.IsNullOrEmpty(ext) ? "None".Colorize(StringColors.Red) : ext.Colorize(StringColors.Cyan)) + "\n" +
+    "  - Recursive: " + (recursive ? "Yes".Colorize(StringColors.Green) : "No".Colorize(StringColors.Red)) + "\n" +
     "  - FFmpeg parameters: " + "-i [input] ".Colorize(StringColors.Gray) + ffparams.Colorize(StringColors.Cyan) + $" -y [output]{ext}".Colorize(StringColors.Gray));
 
-    Write("\nProceed? (y/n): ");
-    var choice = ReadLine()?.ToLower() ?? "n";
-    if (choice != "y")
+    if (!y)
     {
-        WriteLine("Operation cancelled.");
-        return;
+        Write("\nProceed? (y/n): ");
+        var choice = ReadLine()?.ToLower() ?? "n";
+        if (choice != "y")
+        {
+            WriteLine("Operation cancelled.");
+            return;
+        }
+    }
+    else
+    {
+        WriteLine("Proceeding automatically");
     }
 
     // PROCESS FILES
@@ -174,7 +184,15 @@ try
             {
                 try
                 {
-                    var move_file = Path.Combine(move_dir, Path.GetFileName(f));
+                    // Get relative path from input root
+                    var relativePath = Path.GetRelativePath(input_root, f);
+                    var move_file = Path.Combine(move_dir, relativePath);
+                    
+                    // Create directory structure if it doesn't exist
+                    var move_file_dir = Path.GetDirectoryName(move_file);
+                    if (!string.IsNullOrEmpty(move_file_dir) && !Directory.Exists(move_file_dir))
+                        Directory.CreateDirectory(move_file_dir);
+                    
                     File.Move(f, move_file, true);
                 }
                 catch { }
@@ -240,13 +258,15 @@ string CleanFFmpegParams(string ffparams)
     return ffparams;
 }
 
-List<string> ProcessArguments(out bool tscopy, out string ext, out string move_dir, out string ffparams)
+(List<string>, string) ProcessArguments(out bool tscopy, out string ext, out string move_dir, out string ffparams, out bool y, out bool r)
 {
     // PROCESS ARGUMENTS
     ext = "";
     ffparams = "";
     move_dir = "";
     tscopy = false;
+    y = false;
+    r = false;
     string? rgx = null;
     string? input = null;
     for (int i = 0; i < args.Length; i++)
@@ -255,6 +275,8 @@ List<string> ProcessArguments(out bool tscopy, out string ext, out string move_d
         if (input == null)
         {
             if (a == "-tscopy") tscopy = true;
+            else if (a == "-r") r = true;
+            else if (a == "-y") y = true;
             else if (a == "-rgx")
             {
                 if (args.Length <= i + 1)
@@ -297,13 +319,18 @@ List<string> ProcessArguments(out bool tscopy, out string ext, out string move_d
 
     // COLLECT INPUT FILES
     List<string> input_files = new();
+    string input_root = "";
+    
     if (File.Exists(input))
     {
         input_files.Add(input);
+        input_root = Path.GetDirectoryName(input) ?? "";
     }
     else if (Directory.Exists(input))
     {
-        var files = Directory.GetFiles(input);
+        input_root = input;
+        var searchOption = r ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+        var files = Directory.GetFiles(input, "*", searchOption);
         if (rgx != null) files = files.Where(f => Regex.IsMatch(f, rgx)).ToArray();
         input_files.AddRange(files);
     }
@@ -317,8 +344,5 @@ List<string> ProcessArguments(out bool tscopy, out string ext, out string move_d
         throw new ArgumentException("No input files found");
     }
 
-    return input_files;
+    return (input_files, input_root);
 }
-
-
-
